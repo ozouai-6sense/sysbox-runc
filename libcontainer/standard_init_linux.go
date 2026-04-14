@@ -178,6 +178,13 @@ func (l *linuxStandardInit) Init() error {
 	// Config the sysctls
 	for key, value := range l.config.Config.Sysctl {
 		if err := writeSystemProperty(key, value); err != nil {
+			// net.ipv4.ping_group_range can fail with EINVAL in user-namespaced
+			// containers on Linux 6.5+ when the network namespace inherits a
+			// restricted value (1 0) that the kernel then rejects. Sysbox manages
+			// user namespaces itself so this sysctl is safe to skip on EINVAL.
+			if key == "net.ipv4.ping_group_range" && errors.Is(err, unix.EINVAL) {
+				continue
+			}
 			return errors.Wrapf(err, "write sysctl key %s", key)
 		}
 	}

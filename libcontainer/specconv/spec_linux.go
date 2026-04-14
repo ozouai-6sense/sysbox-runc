@@ -847,6 +847,35 @@ func stringToDeviceRune(s string) (devices.Type, error) {
 	}
 }
 
+// zfsDevice returns a Device entry for /dev/zfs if the ZFS kernel module is
+// loaded on the host, reading the minor number dynamically (it is assigned by
+// the misc subsystem at module load time and is not fixed). Returns nil if ZFS
+// is not present. The device is added to both the cgroup allowlist and
+// config.Devices so that sysbox-runc bind-mounts it into the container's /dev.
+func zfsDevice() *devices.Device {
+	info, err := os.Stat("/dev/zfs")
+	if err != nil {
+		return nil
+	}
+	sys, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	return &devices.Device{
+		Path:     "/dev/zfs",
+		FileMode: 0666,
+		Uid:      0,
+		Gid:      0,
+		Rule: devices.Rule{
+			Type:        devices.CharDevice,
+			Major:       int64(unix.Major(sys.Rdev)),
+			Minor:       int64(unix.Minor(sys.Rdev)),
+			Permissions: "rwm",
+			Allow:       true,
+		},
+	}
+}
+
 func createDevices(spec *specs.Spec, config *configs.Config) ([]*devices.Device, error) {
 	// If a spec device is redundant with a default device, remove that default
 	// device (the spec one takes priority).
@@ -899,6 +928,14 @@ next:
 			}
 			config.Devices = append(config.Devices, device)
 		}
+	}
+
+	// Expose /dev/zfs if the ZFS kernel module is loaded on the host. This
+	// allows containers using the sysbox-runc runtime to access ZFS via
+	// delegated permissions (zfs allow) without requiring --privileged.
+	if zfsDev := zfsDevice(); zfsDev != nil {
+		dedupedAllowDevs = append(dedupedAllowDevs, zfsDev)
+		config.Devices = append(config.Devices, zfsDev)
 	}
 
 	return dedupedAllowDevs, nil
